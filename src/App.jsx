@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { 
@@ -9,8 +9,9 @@ import {
   DialogDescription, 
   DialogFooter 
 } from "@/components/ui/dialog";
-import { Send, File } from 'lucide-react'
+import { Send, File, Activity } from 'lucide-react';
 import { useLanDrop } from '@/hooks/useLanDrop';
+import { Progress } from "@/components/ui/progress";
 
 // Helper function to format bytes into a human-readable string
 function formatBytes(bytes, decimals = 2) {
@@ -23,7 +24,7 @@ function formatBytes(bytes, decimals = 2) {
 }
 
 function App() {
-  const { status, identity, devices, requestTransfer, incomingRequest, setIncomingRequest } = useLanDrop();
+  const { status, identity, devices, requestTransfer, incomingRequest, setIncomingRequest, respondToTransfer, acceptedTransfer, setAcceptedTransfer, transferProgress } = useLanDrop();
   // State for the modal
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [file, setFile] = useState(null);
@@ -33,6 +34,37 @@ function App() {
   // Filter out our own device
   const otherDevices = devices.filter(d => d.id !== identity.id);
 
+  // Match the backend route, send raw binary, and pass the device ID header
+  useEffect(() => {
+    if (acceptedTransfer && file) {
+      const uploadFile = async () => {
+        try {
+          const res = await fetch(`http://localhost:3000/transfers/${acceptedTransfer}/data`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/octet-stream',
+              'x-device-id': identity.id
+            },
+            body: file, // Send the raw file directly!
+          });
+          
+          if (res.ok) {
+            console.log('Upload complete!');
+            setFile(null);
+          } else {
+            console.error('Upload rejected by backend:', await res.text());
+          }
+        } catch (err) {
+          console.error('Upload failed:', err);
+        } finally {
+          setAcceptedTransfer(null);
+        }
+      };
+
+      uploadFile();
+    }
+  }, [acceptedTransfer, file, identity.id, setAcceptedTransfer]);
+
   const handleSendRequest = () => {
     if (!file || !selectedDevice) return;
     
@@ -41,7 +73,6 @@ function App() {
     
     // Clear the UI state and close the modal
     setSelectedDevice(null);
-    setFile(null);
   };
 
   return (
@@ -110,6 +141,32 @@ function App() {
         {otherDevices.length === 0 && (
           <div className="absolute bottom-24 text-center text-zinc-500 animate-pulse">
             Open LanDrop on other devices to send files
+          </div>
+        )}
+
+        {/* Floating Progress Panel */}
+        {transferProgress && (
+          <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-full max-w-md bg-[#121212] border border-zinc-800 rounded-2xl p-5 shadow-2xl z-50 animate-in slide-in-from-bottom-10 fade-in duration-300">
+            <div className="flex justify-between items-center mb-4">
+              <div className="flex items-center space-x-4">
+                <div className="bg-blue-600/20 p-3 rounded-full">
+                  <Activity className="w-5 h-5 text-blue-500 animate-pulse" />
+                </div>
+                <div>
+                  <h4 className="text-zinc-100 font-medium tracking-wide">Transferring...</h4>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    {formatBytes(transferProgress.transferred)} / {formatBytes(transferProgress.total)}
+                  </p>
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-blue-500 font-bold text-lg">{transferProgress.percentage}%</span>
+                {/* Reuse our formatBytes utility to beautifully format the MB/s! */}
+                <p className="text-xs text-zinc-500">{formatBytes(transferProgress.speed)}/s</p>
+              </div>
+            </div>
+            {/* Shadcn progress bar */}
+            <Progress value={transferProgress.percentage} className="h-2 bg-zinc-800 [&>div]:bg-blue-600" />
           </div>
         )}
         
@@ -232,11 +289,11 @@ function App() {
                 </div>
               </div>
 
-              <DialogFooter className="sm:justify-between border-t border-zinc-800/50 pt-4 mt-2">
+              <DialogFooter className="sm:justify-between">
                 <Button 
                   className="bg-red-500 hover:bg-red-600 text-white"
                   onClick={() => {
-                    console.log("Declined transfer");
+                    respondToTransfer(incomingRequest.transferId, false);
                     setIncomingRequest(null);
                   }}
                 >
@@ -246,7 +303,19 @@ function App() {
                 <Button 
                   className="bg-blue-600 hover:bg-blue-700 text-white"
                   onClick={() => {
-                    console.log("Accepted transfer:", incomingRequest.transferId);
+                    // 1. Tell the backend we accept
+                    respondToTransfer(incomingRequest.transferId, true);
+                    
+                    // 2. Trigger the browser's native download mechanism
+                    const downloadUrl = `http://localhost:3000/transfers/${incomingRequest.transferId}/data?deviceId=${identity.id}`;
+                    
+                    const anchor = document.createElement('a');
+                    anchor.href = downloadUrl;
+                    anchor.download = incomingRequest.filename;
+                    document.body.appendChild(anchor);
+                    anchor.click();
+                    document.body.removeChild(anchor);
+                    // 3. Close the modal
                     setIncomingRequest(null);
                   }}
                 >
