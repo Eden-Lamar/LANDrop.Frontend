@@ -19,6 +19,8 @@ export function useLanDrop() {
 	const [status, setStatus] = useState('disconnected'); // disconnected, connected, registered
 	const [identity] = useState(() => generateIdentity());
 	const [devices, setDevices] = useState([]);
+  const [acceptedTransfer, setAcceptedTransfer] = useState(null);
+  const [transferProgress, setTransferProgress] = useState(null);
 
 	// State to track when someone wants to send us a file
   const [incomingRequest, setIncomingRequest] = useState(null);
@@ -47,7 +49,7 @@ export function useLanDrop() {
 			// Print everything the server sends us
       console.log("📥 WS Received:", parsed);
       if (parsed.type === 'error') {
-        console.error("❌ BACKEND ERROR:", parsed.message);
+        console.error("BACKEND ERROR:", parsed.message);
       }
 
 			if (parsed.type === 'registered') {
@@ -55,13 +57,35 @@ export function useLanDrop() {
 				// setMyId(parsed.id);
 			} else if (parsed.type === 'device-list') {
 				setDevices(parsed.devices);
-			}
-			
-			// Listen for incoming file transfer requests
-      else if (parsed.type === 'transfer:request') {
+			} else if (parsed.type === 'transfer:request') { // Listen for incoming file transfer requests
         setIncomingRequest(parsed);
+      } else if (parsed.type === 'transfer:accepted') {
+        console.log(`Transfer ${parsed.transferId} accepted! Preparing HTTP upload...`);
+        // Tell the UI it is time to upload!
+        setAcceptedTransfer(parsed.transferId);
+      } 
+      else if (parsed.type === 'transfer:rejected') {
+        console.log(`Transfer ${parsed.transferId} was declined.`);
+        alert("The receiver declined your file.");
+      } else if (parsed.type === 'transfer:progress') {
+        setTransferProgress({
+          percentage: parsed.progress,
+          speed: parsed.speed,
+          transferred: parsed.transferredBytes,
+          total: parsed.totalBytes
+        });
+      }
+      // Handle completion or failure
+      else if (['transfer:completed', 'transfer:failed', 'transfer:cancelled', 'transfer:corrupted'].includes(parsed.type)) {
+        if (parsed.type !== 'transfer:completed') {
+          alert(`Transfer stopped: ${parsed.type}`);
+        }
+        // Clear the progress bar after 1 second so the user can see it hit 100%
+        setTimeout(() => setTransferProgress(null), 1000);
       }
 		};
+			
+			
 
 		return () => ws.current.close();
 	}, [identity]);
@@ -80,12 +104,26 @@ export function useLanDrop() {
     }));
   }, []);
 
+  // Receiver responds to the incoming request
+  const respondToTransfer = useCallback((transferId, accepted) => {
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    
+    ws.current.send(JSON.stringify({
+      type: accepted ? 'transfer:accept' : 'transfer:reject',
+      transferId
+    }));
+  }, []);
+
 	return { 
     status, 
     identity, 
     devices, 
     requestTransfer, 
     incomingRequest, 
-    setIncomingRequest 
+    setIncomingRequest, 
+    respondToTransfer,
+    acceptedTransfer,
+    setAcceptedTransfer,
+    transferProgress
   };
 }
