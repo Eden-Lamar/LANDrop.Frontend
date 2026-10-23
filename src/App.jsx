@@ -36,7 +36,7 @@ function App() {
   const { status, identity, devices, requestTransfer, incomingRequest, setIncomingRequest, respondToTransfer, transferProgress, setTransferProgress,sendClipboard, incomingClipboard, setIncomingClipboard, declinedTransfer, setDeclinedTransfer } = useLanDrop();
   // State for the modal
   const [selectedDevice, setSelectedDevice] = useState(null);
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
   const [textToSend, setTextToSend] = useState(''); // Track the typed message
@@ -46,14 +46,14 @@ function App() {
 
 
   const handleSendRequest = () => {
-    if (!file || !selectedDevice) return;
+    if (!files || files.length === 0 || !selectedDevice) return;
     
     // Fire the WebSocket message to the backend
-    requestTransfer(selectedDevice.id, file);
+    requestTransfer(selectedDevice.id, files);
     
     // Clear the UI state and close the modal
     setSelectedDevice(null);
-    setFile(null)
+    setFiles([])
   };
   
   const peerCount = devices.filter(d => d.id !== identity.id).length;
@@ -167,8 +167,10 @@ function App() {
                   )}
                 </div>
                 <div>
-                  <h4 className="text-zinc-100 font-medium tracking-wide">
-                    {transferProgress.status === 'completed' ? 'Transfer Complete' : 'Transferring...'}
+                  <h4 className="text-zinc-100 font-medium tracking-wide truncate max-w-[150px]">
+                    {transferProgress.status === 'completed' 
+                      ? 'Transfer Complete' 
+                      : transferProgress.currentFileName || 'Transferring...'}
                   </h4>
                   <p className="text-xs text-zinc-400 mt-0.5">
                     {formatBytes(transferProgress.transferred)} / {formatBytes(transferProgress.total)}
@@ -210,7 +212,7 @@ function App() {
       <Dialog open={!!selectedDevice} onOpenChange={(open) => {
         if (!open) {
           setSelectedDevice(null);
-          setFile(null);
+          setFiles([]);
           setTextToSend(''); // Clear text on close
         }
       }}>
@@ -218,7 +220,7 @@ function App() {
           <DialogHeader>
             <DialogTitle>Send to <span className="font-semibold text-blue-400">{selectedDevice?.name}</span></DialogTitle>
             <DialogDescription className="text-zinc-400">
-              Select a file from your device to transfer securely over the network.
+              Select files from your device to transfer securely over the network.
             </DialogDescription>
           </DialogHeader>
           
@@ -236,19 +238,42 @@ function App() {
                 e.preventDefault();
                 setIsDragging(false);
                 if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                  setFile(e.dataTransfer.files[0]);
+                  const newFiles = Array.from(e.dataTransfer.files);
+                  setFiles(prev => {
+                    // Combine old and new, then filter out duplicates by name and size
+                    const combined = [...prev, ...newFiles];
+                    return combined.filter((file, index, self) =>
+                      index === self.findIndex((f) => f.name === file.name && f.size === file.size)
+                    );
+                  });
                 }
               }}
               onClick={() => fileInputRef.current?.click()}
             >
               <input 
                 type="file" 
+                multiple
                 className="hidden" 
+                id="file-upload"
                 ref={fileInputRef}
-                onChange={(e) => setFile(e.target.files?.[0] || null)}
+                onChange={(e) => {
+                  if (e.target.files) {
+                  const newFiles = Array.from(e.target.files);
+                  setFiles(prev => {
+                    // Combine old and new, then filter out duplicates by name and size
+                    const combined = [...prev, ...newFiles];
+                    return combined.filter((file, index, self) =>
+                      index === self.findIndex((f) => f.name === file.name && f.size === file.size)
+                    );
+                  });
+                  
+                  // Use an empty string to properly wipe the browser's file memory!
+                  e.target.value = ''; 
+                }
+                }}
               />
               
-              {!file ? (
+              {files?.length === 0 ? (
                 <>
                   <div className="relative mb-4">
                     <div className="absolute inset-0 bg-zinc-700/50 rounded-xl transform scale-110 -rotate-12"></div>
@@ -267,10 +292,26 @@ function App() {
                     <File className="w-10 h-10 text-blue-400" />
                   </div>
                   <div>
-                    <p className="font-medium text-zinc-200 max-w-62.5 truncate" title={file.name}>{file.name}</p>
-                    <p className="text-sm text-zinc-500">{formatBytes(file.size)}</p>
+                    {files.length > 0 && (
+                      <div className="mt-4 p-3 bg-zinc-900 border border-zinc-700 rounded-lg text-sm text-zinc-300">
+                        <span className="font-semibold text-white">{files.length} file(s)</span> selected.
+                      </div>
+                    )}
+                    <p className="text-sm text-zinc-500 mt-2">Total: {formatBytes((files || []).reduce((acc, f) => acc + f.size, 0))}</p>
                   </div>
-                  <p className="text-xs text-blue-400 mt-2 hover:underline">Click to change file</p>
+
+                  <div className="flex space-x-6 mt-3">
+                    <p className="text-xs text-blue-400 hover:underline">Click to add more files</p>
+                    <p 
+                      className="text-xs text-red-400 hover:underline cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation(); // Prevent the file window from opening
+                        setFiles([]); // Clear the array
+                      }}
+                    >
+                      Clear all
+                    </p>
+                  </div>
                 </div>
               )}
             </div>
@@ -311,7 +352,7 @@ function App() {
               Cancel
             </Button>
             <Button 
-              disabled={!file} 
+              disabled={!files || files.length === 0} 
               className="bg-blue-600 hover:bg-blue-700 text-white disabled:bg-zinc-800 disabled:text-zinc-500"
               onClick={handleSendRequest}
             >
@@ -332,24 +373,23 @@ function App() {
                 <DialogDescription className="text-zinc-400">
                   <span className="font-semibold text-blue-400">
                     {devices.find(d => d.id === incomingRequest?.senderId)?.name || 'A device'}
-                  </span> wants to send you a file.
+                  </span> wants to send you {incomingRequest?.files?.length || 0} file(s).
                 </DialogDescription>
               </DialogHeader>
               
-              <div className="py-6 flex flex-col items-center justify-center space-y-4 bg-zinc-900/30 rounded-xl border border-zinc-800">
-                <div className="bg-blue-500/20 p-4 rounded-full">
-                  <File className="w-10 h-10 text-blue-400" />
+              <div className="py-4">
+            <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-4 flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="bg-blue-600/20 p-2 rounded-lg">
+                  <File className="w-6 h-6 text-blue-500" />
                 </div>
-                <div className="text-center">
-                  <p className="font-medium text-zinc-200 max-w-62.5 truncate" title={incomingRequest?.filename}>
-                    {incomingRequest?.filename}
-                  </p>
-                  {/* Reuse our formatBytes utility here! */}
-                  <p className="text-sm text-zinc-500">
-                    {incomingRequest?.size ? formatBytes(incomingRequest.size) : ''}
-                  </p>
+                <div>
+                  <p className="text-sm font-medium text-zinc-200">{incomingRequest?.files?.length || 0} File(s)</p>
+                  <p className="text-xs text-zinc-500">{formatBytes(incomingRequest?.totalSize || 0)}</p>
                 </div>
               </div>
+            </div>
+          </div>
 
               <DialogFooter className="sm:justify-between">
                 <Button 
