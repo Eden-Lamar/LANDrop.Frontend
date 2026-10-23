@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { 
@@ -9,7 +9,7 @@ import {
   DialogDescription, 
   DialogFooter 
 } from "@/components/ui/dialog";
-import { Send, File, Activity } from 'lucide-react';
+import { Send, File, Activity, CheckCircle, X } from 'lucide-react';
 import { useLanDrop } from '@/hooks/useLanDrop';
 import { Progress } from "@/components/ui/progress";
 
@@ -23,8 +23,16 @@ function formatBytes(bytes, decimals = 2) {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
 
+// Helper function to format time in seconds into a human-readable string
+function formatTime(seconds) {
+  if (!isFinite(seconds) || seconds < 0) return '0s';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
 function App() {
-  const { status, identity, devices, requestTransfer, incomingRequest, setIncomingRequest, respondToTransfer, acceptedTransfer, setAcceptedTransfer, transferProgress } = useLanDrop();
+  const { status, identity, devices, requestTransfer, incomingRequest, setIncomingRequest, respondToTransfer, transferProgress, setTransferProgress } = useLanDrop();
   // State for the modal
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [file, setFile] = useState(null);
@@ -34,36 +42,6 @@ function App() {
   // Filter out our own device
   const otherDevices = devices.filter(d => d.id !== identity.id);
 
-  // Match the backend route, send raw binary, and pass the device ID header
-  useEffect(() => {
-    if (acceptedTransfer && file) {
-      const uploadFile = async () => {
-        try {
-          const res = await fetch(`http://localhost:3000/transfers/${acceptedTransfer}/data`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/octet-stream',
-              'x-device-id': identity.id
-            },
-            body: file, // Send the raw file directly!
-          });
-          
-          if (res.ok) {
-            console.log('Upload complete!');
-            setFile(null);
-          } else {
-            console.error('Upload rejected by backend:', await res.text());
-          }
-        } catch (err) {
-          console.error('Upload failed:', err);
-        } finally {
-          setAcceptedTransfer(null);
-        }
-      };
-
-      uploadFile();
-    }
-  }, [acceptedTransfer, file, identity.id, setAcceptedTransfer]);
 
   const handleSendRequest = () => {
     if (!file || !selectedDevice) return;
@@ -73,6 +51,7 @@ function App() {
     
     // Clear the UI state and close the modal
     setSelectedDevice(null);
+    setFile(null)
   };
 
   return (
@@ -149,24 +128,48 @@ function App() {
           <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-full max-w-md bg-[#121212] border border-zinc-800 rounded-2xl p-5 shadow-2xl z-50 animate-in slide-in-from-bottom-10 fade-in duration-300">
             <div className="flex justify-between items-center mb-4">
               <div className="flex items-center space-x-4">
-                <div className="bg-blue-600/20 p-3 rounded-full">
-                  <Activity className="w-5 h-5 text-blue-500 animate-pulse" />
+                <div className={`p-3 rounded-full ${transferProgress.status === 'completed' ? 'bg-green-500/20' : 'bg-blue-600/20'}`}>
+                  {transferProgress.status === 'completed' ? (
+                    <CheckCircle className="w-5 h-5 text-green-500" />
+                  ) : (
+                    <Activity className="w-5 h-5 text-blue-500 animate-pulse" />
+                  )}
                 </div>
                 <div>
-                  <h4 className="text-zinc-100 font-medium tracking-wide">Transferring...</h4>
+                  <h4 className="text-zinc-100 font-medium tracking-wide">
+                    {transferProgress.status === 'completed' ? 'Transfer Complete' : 'Transferring...'}
+                  </h4>
                   <p className="text-xs text-zinc-400 mt-0.5">
                     {formatBytes(transferProgress.transferred)} / {formatBytes(transferProgress.total)}
                   </p>
                 </div>
               </div>
-              <div className="text-right">
-                <span className="text-blue-500 font-bold text-lg">{transferProgress.percentage}%</span>
-                {/* Reuse our formatBytes utility to beautifully format the MB/s! */}
-                <p className="text-xs text-zinc-500">{formatBytes(transferProgress.speed)}/s</p>
+              <div className="text-right flex flex-col items-end">
+                <span className={`${transferProgress.status === 'completed' ? 'text-green-500' : 'text-blue-500'} font-bold text-lg`}>
+                  {transferProgress.percentage}%
+                </span>
+                {transferProgress.status === 'completed' ? (
+                  <p className="text-xs text-zinc-500">Took {formatTime(transferProgress.totalTime)}</p>
+                ) : (
+                  <p className="text-xs text-zinc-500">
+                    {formatBytes(transferProgress.speed)}/s • {formatTime(transferProgress.eta)} left
+                  </p>
+                )}
               </div>
             </div>
-            {/* Shadcn progress bar */}
-            <Progress value={transferProgress.percentage} className="h-2 bg-zinc-800 [&>div]:bg-blue-600" />
+            <Progress 
+              value={transferProgress.percentage} 
+              className={`h-2 bg-zinc-800 ${transferProgress.status === 'completed' ? '[&>div]:bg-green-500' : '[&>div]:bg-blue-600'}`} 
+            />
+            
+            {transferProgress.status === 'completed' && (
+              <button 
+                onClick={() => setTransferProgress(null)}
+                className="absolute -top-3 -right-3 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-zinc-300 rounded-full p-1.5 transition-colors shadow-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
         )}
         
@@ -305,17 +308,7 @@ function App() {
                   onClick={() => {
                     // 1. Tell the backend we accept
                     respondToTransfer(incomingRequest.transferId, true);
-                    
-                    // 2. Trigger the browser's native download mechanism
-                    const downloadUrl = `http://localhost:3000/transfers/${incomingRequest.transferId}/data?deviceId=${identity.id}`;
-                    
-                    const anchor = document.createElement('a');
-                    anchor.href = downloadUrl;
-                    anchor.download = incomingRequest.filename;
-                    document.body.appendChild(anchor);
-                    anchor.click();
-                    document.body.removeChild(anchor);
-                    // 3. Close the modal
+                    // 2. Close the modal
                     setIncomingRequest(null);
                   }}
                 >
