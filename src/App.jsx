@@ -9,7 +9,7 @@ import {
   DialogDescription, 
   DialogFooter 
 } from "@/components/ui/dialog";
-import { Send, File, Activity, CheckCircle, X } from 'lucide-react';
+import { Send, File, Activity, CheckCircle, X, MessageSquare, Copy } from 'lucide-react';
 import { useLanDrop } from '@/hooks/useLanDrop';
 import { Progress } from "@/components/ui/progress";
 
@@ -32,12 +32,13 @@ function formatTime(seconds) {
 }
 
 function App() {
-  const { status, identity, devices, requestTransfer, incomingRequest, setIncomingRequest, respondToTransfer, transferProgress, setTransferProgress } = useLanDrop();
+  const { status, identity, devices, requestTransfer, incomingRequest, setIncomingRequest, respondToTransfer, transferProgress, setTransferProgress,sendClipboard, incomingClipboard, setIncomingClipboard } = useLanDrop();
   // State for the modal
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [file, setFile] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
+  const [textToSend, setTextToSend] = useState(''); // Track the typed message
 
   // Filter out our own device
   const otherDevices = devices.filter(d => d.id !== identity.id);
@@ -175,11 +176,12 @@ function App() {
         
       </main>
 
-      {/* File Transfer Modal */}
+      {/* Sender File Transfer Modal */}
       <Dialog open={!!selectedDevice} onOpenChange={(open) => {
         if (!open) {
           setSelectedDevice(null);
           setFile(null);
+          setTextToSend(''); // Clear text on close
         }
       }}>
         <DialogContent className="sm:max-w-md bg-zinc-900 border-zinc-800 text-zinc-100">
@@ -241,6 +243,33 @@ function App() {
                   <p className="text-xs text-blue-400 mt-2 hover:underline">Click to change file</p>
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* Text/URL Sending Section */}
+          <div className="border-t border-zinc-800/50 pt-6 mt-2">
+            <label className="text-sm font-medium text-zinc-300 flex items-center mb-3">
+              <MessageSquare className="w-4 h-4 mr-2" /> Send Text or Link
+            </label>
+            <div className="flex space-x-2">
+              <input 
+                type="text" 
+                value={textToSend}
+                onChange={(e) => setTextToSend(e.target.value)}
+                placeholder="Type a message or paste a URL..." 
+                className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500 transition-colors"
+              />
+              <Button 
+                disabled={!textToSend} 
+                onClick={() => {
+                  sendClipboard(selectedDevice.id, textToSend);
+                  setSelectedDevice(null);
+                  setTextToSend('');
+                }}
+                className="bg-zinc-800 hover:bg-blue-600 text-white disabled:bg-zinc-900 disabled:text-zinc-600 border border-zinc-700 hover:border-blue-500 transition-all"
+              >
+                <Send className="w-4 h-4" />
+              </Button>
             </div>
           </div>
 
@@ -313,6 +342,50 @@ function App() {
                   }}
                 >
                   Accept File
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Incoming Clipboard Modal */}
+          <Dialog open={!!incomingClipboard} onOpenChange={(open) => {
+            if (!open) setIncomingClipboard(null);
+          }}>
+            <DialogContent className="sm:max-w-md bg-[#0a0a0a] border-zinc-800 text-zinc-100 shadow-2xl">
+              <DialogHeader>
+                <DialogTitle>Incoming Message</DialogTitle>
+                <DialogDescription className="text-zinc-400">
+                  <span className="font-semibold text-blue-400">
+                    {devices.find(d => d.id === incomingClipboard?.senderId)?.name || 'A device'}
+                  </span> sent you a snippet.
+                </DialogDescription>
+              </DialogHeader>
+              
+              <div className="py-4">
+                <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-4 overflow-x-auto">
+                  <p className="text-zinc-200 whitespace-pre-wrap break-words font-mono text-sm">
+                    {incomingClipboard?.content}
+                  </p>
+                </div>
+              </div>
+
+              <DialogFooter className="sm:justify-end border-t border-zinc-800/50 pt-4 mt-2">
+                <Button 
+                  variant="destructive" 
+                  className="text-red-400 hover:text-red-400/80 hover:bg-red-800 mr-2"
+                  onClick={() => setIncomingClipboard(null)}
+                >
+                  Dismiss
+                </Button>
+                <Button 
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  onClick={() => {
+                    navigator.clipboard.writeText(incomingClipboard.content);
+                    setIncomingClipboard(null);
+                  }}
+                >
+                  <Copy className="w-4 h-4 mr-2" />
+                  Copy to Clipboard
                 </Button>
               </DialogFooter>
             </DialogContent>
