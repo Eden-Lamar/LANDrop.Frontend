@@ -20,9 +20,8 @@ export function useLanDrop() {
 	const [identity] = useState(() => generateIdentity());
 	const [devices, setDevices] = useState([]);
   const [transferProgress, setTransferProgress] = useState(null);
-
-	// State to track when someone wants to send us a file
   const [incomingRequest, setIncomingRequest] = useState(null);
+  const [incomingClipboard, setIncomingClipboard] = useState(null);
 
 	const ws = useRef(null);
 
@@ -233,11 +232,22 @@ export function useLanDrop() {
       }
       else if (parsed.type === 'webrtc:ice-candidate' && pcRef.current) {
         await pcRef.current.addIceCandidate(new RTCIceCandidate(parsed.payload));
+      } else if (parsed.type === 'clipboard:receive') {
+        setIncomingClipboard(parsed);
+      }
+      else if (parsed.type === 'clipboard:sent') {
+        console.log(`✅ Text delivered to ${parsed.receiverId}`);
       }
     };	
 
 		return () => ws.current.close();
 	}, [identity, initWebRTC]);
+
+    // Emit the clipboard payload to the backend
+  const sendClipboard = useCallback((receiverId, content) => {
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    ws.current.send(JSON.stringify({ type: 'clipboard:send', receiverId, content }));
+  }, []);
 
 	// Function to send a transfer request to another device
   const requestTransfer = useCallback((receiverId, file) => {
@@ -272,6 +282,9 @@ export function useLanDrop() {
     setIncomingRequest, 
     respondToTransfer,
     transferProgress,
-    setTransferProgress
+    setTransferProgress,
+    incomingClipboard,
+    setIncomingClipboard,
+    sendClipboard
   };
 }
