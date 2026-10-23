@@ -42,6 +42,9 @@ export function useLanDrop() {
   const receiveBufferRef = useRef([]);
   const receivedBytesRef = useRef(0);
   const startTimeRef = useRef(0);
+  // Track the internal boundaries of the current file
+  const currentFileBytesRef = useRef(0); 
+  const currentFileIndexRef = useRef(0);
 
   const cleanupWebRTC = useCallback(() => {
     if (dcRef.current) dcRef.current.close();
@@ -50,17 +53,24 @@ export function useLanDrop() {
     dcRef.current = null;
     receiveBufferRef.current = [];
     receivedBytesRef.current = 0;
+    currentFileBytesRef.current = 0; // Reset
+    currentFileIndexRef.current = 0; // Reset
   }, []);
 
-  const sendFileChunks = useCallback((file) => {
-    const chunkSize = 256 * 1024; // 256KB chunks for max throughput
-    let offset = 0;
+  const sendFileChunks = useCallback((files = []) => {
+    if (!files || files.length === 0) return;
+    const chunkSize = 64 * 1024; 
+    let fileIndex = 0;
+    let fileOffset = 0;
+    let globalOffset = 0;
     let lastUiUpdate = 0;
+    const totalSize = files.reduce((acc, f) => acc + f.size, 0);
     startTimeRef.current = Date.now();
 
     const pushNextChunk = async () => {
-      while (offset < file.size) {
-        // Lower buffer threshold to 1MB
+      while (fileIndex < files.length) {
+        const currentFile = files[fileIndex];
+
         if (dcRef.current.bufferedAmount >= 1024 * 1024) {
           dcRef.current.onbufferedamountlow = () => {
             dcRef.current.onbufferedamountlow = null;
@@ -70,29 +80,35 @@ export function useLanDrop() {
         }
         
         try {
-        const chunk = await file.slice(offset, offset + chunkSize).arrayBuffer();
-        dcRef.current.send(chunk);
-        offset += chunk.byteLength;
-        
-        const now = Date.now();
-        // Throttle UI updates to every 250ms to prevent React thread freezing
-        if (now - lastUiUpdate > 250 || offset === file.size) {
-          const elapsed = (now - startTimeRef.current) / 1000;
-          const speed = elapsed > 0 ? Math.round(offset / elapsed) : 0;
-          const eta = speed > 0 ? Math.round((file.size - offset) / speed) : 0;
+          const chunk = await currentFile.slice(fileOffset, fileOffset + chunkSize).arrayBuffer();
+          dcRef.current.send(chunk);
           
-          setTransferProgress({
-            status: 'transferring',
-            percentage: parseFloat(((offset / file.size) * 100).toFixed(1)),
-            transferred: offset,
-            total: file.size,
-            speed,
-            eta
-          });
-          lastUiUpdate = now;
-        }
-      } catch (err) {
-          // Catch the OperationError and pause gracefully instead of crashing
+          fileOffset += chunk.byteLength;
+          globalOffset += chunk.byteLength;
+          
+          const now = Date.now();
+          if (now - lastUiUpdate > 250 || globalOffset === totalSize) {
+            const elapsed = (now - startTimeRef.current) / 1000;
+            const speed = elapsed > 0 ? Math.round(globalOffset / elapsed) : 0;
+            const eta = speed > 0 ? Math.round((totalSize - globalOffset) / speed) : 0;
+            
+            setTransferProgress({
+              status: 'transferring',
+              percentage: parseFloat(((globalOffset / totalSize) * 100).toFixed(1)),
+              transferred: globalOffset,
+              total: totalSize,
+              speed,
+              eta,
+              currentFileName: currentFile.name 
+            });
+            lastUiUpdate = now;
+          }
+
+          if (fileOffset >= currentFile.size) {
+            fileIndex++; 
+            fileOffset = 0;
+          }
+        } catch (err) {
           if (err.name === 'OperationError') {
             dcRef.current.onbufferedamountlow = () => {
               dcRef.current.onbufferedamountlow = null;
@@ -100,20 +116,17 @@ export function useLanDrop() {
             };
             return;
           }
-          console.error("WebRTC send error:", err);
           return;
         }
       }
       
       const totalTime = Math.round((Date.now() - startTimeRef.current) / 1000);
       setTransferProgress(prev => ({ ...prev, status: 'completed', percentage: 100, totalTime }));
-      // cleanupWebRTC();
     };
     
     pushNextChunk();
   }, []);
 
-  // Initialize WebRTC connection
   const initWebRTC = useCallback(async (targetId, isSender) => {
     cleanupWebRTC();
     const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
@@ -128,11 +141,10 @@ export function useLanDrop() {
     if (isSender) {
       const dc = pc.createDataChannel('fileTransfer');
       dcRef.current = dc;
-      dc.bufferedAmountLowThreshold = 1024 * 1024; // 1MB threshold
-      dc.onopen = () => sendFileChunks(pendingFileRef.current.file);
-
-      // Let the receiver dictate when it is safe to close
-      dc.onclose = () => cleanupWebRTC();
+      dc.bufferedAmountLowThreshold = 256 * 1024; 
+      dc.onopen = () => sendFileChunks(pendingFileRef.current.files);
+      
+      dc.onclose = () => cleanupWebRTC(); 
       
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -148,35 +160,49 @@ export function useLanDrop() {
         dc.onmessage = (e) => {
           receiveBufferRef.current.push(e.data);
           receivedBytesRef.current += e.data.byteLength;
+          currentFileBytesRef.current += e.data.byteLength; 
           
+          // 🟢 Restored the missing meta variable and added safety checks
           const meta = incomingMetaRef.current;
+          if (!meta || !meta.files) return;
+          
+          const currentFile = meta.files[currentFileIndexRef.current];
+          if (!currentFile) return;
+
           const now = Date.now();
           
-          if (now - lastUiUpdate > 250 || receivedBytesRef.current === meta.size) {
+          if (now - lastUiUpdate > 250 || receivedBytesRef.current === meta.totalSize) {
             const elapsed = (now - startTimeRef.current) / 1000;
             const speed = elapsed > 0 ? Math.round(receivedBytesRef.current / elapsed) : 0;
-            const eta = speed > 0 ? Math.round((meta.size - receivedBytesRef.current) / speed) : 0;
+            const eta = speed > 0 ? Math.round((meta.totalSize - receivedBytesRef.current) / speed) : 0;
             
             setTransferProgress({
               status: 'transferring',
-              percentage: parseFloat(((receivedBytesRef.current / meta.size) * 100).toFixed(1)),
+              percentage: parseFloat(((receivedBytesRef.current / meta.totalSize) * 100).toFixed(1)),
               transferred: receivedBytesRef.current,
-              total: meta.size,
+              total: meta.totalSize,
               speed,
-              eta
+              eta,
+              currentFileName: currentFile.name
             });
             lastUiUpdate = now;
           }
 
-          if (receivedBytesRef.current === meta.size) {
+          if (currentFileBytesRef.current === currentFile.size) {
             const blob = new Blob(receiveBufferRef.current);
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = meta.filename;
+            a.download = currentFile.name;
             a.click();
             URL.revokeObjectURL(url);
             
+            receiveBufferRef.current = [];
+            currentFileBytesRef.current = 0;
+            currentFileIndexRef.current++; 
+          }
+
+          if (receivedBytesRef.current === meta.totalSize) {
             const totalTime = Math.round((Date.now() - startTimeRef.current) / 1000);
             setTransferProgress(prev => ({ ...prev, status: 'completed', percentage: 100, totalTime }));
             cleanupWebRTC();
@@ -217,7 +243,7 @@ export function useLanDrop() {
 			} else if (parsed.type === 'device-list') {
 				setDevices(parsed.devices);
 			} else if (parsed.type === 'transfer:request') { // Listen for incoming file transfer requests
-        incomingMetaRef.current = { filename: parsed.filename, size: parsed.size };
+        incomingMetaRef.current = { files: parsed.files, totalSize: parsed.totalSize };
         setIncomingRequest(parsed);
       } else if (parsed.type === 'transfer:accepted') {
         if (pendingFileRef.current) initWebRTC(pendingFileRef.current.receiverId, true);
@@ -262,16 +288,17 @@ export function useLanDrop() {
   }, []);
 
 	// Function to send a transfer request to another device
-  const requestTransfer = useCallback((receiverId, file) => {
+  const requestTransfer = useCallback((receiverId, files) => {
     if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
-    pendingFileRef.current = { receiverId, file };
+    pendingFileRef.current = { receiverId, files: files }; // Save array
 		// console.log("📤 Sending Transfer Request:", { receiverId, filename: file.name, size: file.size });
+    
+    const payloadFiles = files.map(f => ({ name: f.name, size: f.size }));
 
     ws.current.send(JSON.stringify({
       type: 'transfer:request',
       receiverId,
-      filename: file.name,
-      size: file.size
+      files: payloadFiles
     }));
   }, []);
 
