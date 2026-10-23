@@ -9,9 +9,10 @@ import {
   DialogDescription, 
   DialogFooter 
 } from "@/components/ui/dialog";
-import { Send, File, Activity, CheckCircle, X, MessageSquare, Copy } from 'lucide-react';
+import { Send, File, Activity, CheckCircle, X, MessageSquare, Copy, XCircle } from 'lucide-react';
 import { useLanDrop } from '@/hooks/useLanDrop';
 import { Progress } from "@/components/ui/progress";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 // Helper function to format bytes into a human-readable string
 function formatBytes(bytes, decimals = 2) {
@@ -32,7 +33,7 @@ function formatTime(seconds) {
 }
 
 function App() {
-  const { status, identity, devices, requestTransfer, incomingRequest, setIncomingRequest, respondToTransfer, transferProgress, setTransferProgress,sendClipboard, incomingClipboard, setIncomingClipboard } = useLanDrop();
+  const { status, identity, devices, requestTransfer, incomingRequest, setIncomingRequest, respondToTransfer, transferProgress, setTransferProgress,sendClipboard, incomingClipboard, setIncomingClipboard, declinedTransfer, setDeclinedTransfer } = useLanDrop();
   // State for the modal
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [file, setFile] = useState(null);
@@ -54,6 +55,8 @@ function App() {
     setSelectedDevice(null);
     setFile(null)
   };
+  
+  const peerCount = devices.filter(d => d.id !== identity.id).length;
 
   return (
     <div className="flex flex-col h-screen bg-[#0a0a0a] text-zinc-100 overflow-hidden">
@@ -61,10 +64,37 @@ function App() {
       {/* Header */}
       <header className="p-6 flex items-center justify-between z-10">
         <h1 className="text-xl font-bold tracking-widest text-zinc-300">LanDrop</h1>
-        <Badge variant="outline" className="text-zinc-400 border-zinc-700 bg-zinc-900/50">
-          {status === 'registered' ? 'Scanning...' : 'Connecting...'}
+        <Badge variant="outline" className={`border-zinc-700 bg-zinc-900/50 ${peerCount > 0 ? 'text-blue-400 border-blue-500/30' : 'text-zinc-400'}`}>
+          {status !== 'registered' 
+            ? 'Connecting...' 
+            : peerCount === 0 
+              ? 'Scanning...' 
+              : `${peerCount} Device${peerCount > 1 ? 's' : ''} Found`}
         </Badge>
       </header>
+
+      {/* Floating Decline Alert */}
+        {declinedTransfer && (
+          <div className="absolute top-10 left-1/2 -translate-x-1/2 w-full max-w-sm z-50 animate-in slide-in-from-top-5 fade-in duration-300 shadow-2xl">
+            <Alert variant="destructive" className="bg-red-950/90 border-red-900 text-red-100 relative pr-10">
+              <XCircle className="h-4 w-4 text-red-400" />
+              <AlertTitle>Transfer Declined</AlertTitle>
+              <AlertDescription>
+                <span className="font-semibold text-blue-400">
+                  {devices.find(d => d.id === declinedTransfer)?.name || 'The receiver'}
+                </span> declined your file.
+              </AlertDescription>
+
+              {/* Manual dismiss button */}
+              <button 
+                onClick={() => setDeclinedTransfer(null)}
+                className="absolute top-3 right-3 text-red-400 hover:text-red-100 transition-colors p-1"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </Alert>
+          </div>
+        )}
 
       {/* Radar Area */}
       <main className="flex-1 flex items-center justify-center relative">
@@ -77,8 +107,8 @@ function App() {
 
           {/* Central User Profile */}
           <div className="relative z-10 flex flex-col items-center justify-center">
-            <div className="w-24 h-24 rounded-full bg-zinc-800 border-4 border-zinc-900 shadow-2xl flex items-center justify-center overflow-hidden">
-              <img src={identity.avatarUrl} alt="avatar" className="w-16 h-16" />
+            <div className="w-28 h-28 rounded-full bg-zinc-800 border-4 border-zinc-900 shadow-2xl flex items-center justify-center overflow-hidden">
+              <img src={identity.avatarUrl} alt="avatar" className="w-20 h-20" />
             </div>
             <div className="mt-4 flex flex-col items-center text-center">
               <p className="text-sm text-zinc-400">You are known as</p>
@@ -105,7 +135,7 @@ function App() {
                   <img 
                     src={`https://api.dicebear.com/10.x/adventurer/svg?seed=${device.name.replace(' ', '')}`} 
                     alt={device.name} 
-                    className="w-10 h-10 group-hover:scale-102 transition-transform" 
+                    className="w-12 h-12 group-hover:scale-102 transition-transform" 
                   />
                 </div>
                 <div className="mt-2 text-center">
