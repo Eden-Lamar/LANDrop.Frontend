@@ -1,18 +1,26 @@
 // src/hooks/useLanDrop.js
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { uniqueNamesGenerator, animals } from 'unique-names-generator';
 
-const ADJECTIVES = ['Cosmic', 'Quantum', 'Neon', 'Lunar', 'Solar', 'Astral', 'Crystal', 'Velvet'];
-const ANIMALS = ['Fox', 'Owl', 'Panther', 'Dolphin', 'Tiger', 'Falcon', 'Wolf', 'Bear'];
+// Custom space/astrology dictionary
+const spaceWords = [
+  'Cosmic', 'Lunar', 'Solar', 'Astral', 'Stellar', 'Celestial', 
+  'Nebula', 'Nova', 'Pulsar', 'Quasar', 'Eclipse', 'Comet', 
+  'Eclipse', 'Aurora', 'Zodiac', 'Orion', 'Apollo', 'Meteor'
+];
 
 function generateIdentity() {
-  const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
-  const animal = ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
+  const name = uniqueNamesGenerator({
+    dictionaries: [spaceWords, animals],
+    separator: ' ',
+    style: 'capital'
+  });
+  
   const id = 'device-' + Math.random().toString(36).substring(2, 10);
+  // Remove spaces from the name for a cleaner seed URL
+  const avatarUrl = `https://api.dicebear.com/10.x/adventurer/svg?seed=${name.replace(/\s+/g, '')}`;
   
-  // Use Dicebear for a cute, deterministic avatar based on the name
-  const avatarUrl = `https://api.dicebear.com/10.x/adventurer/svg?seed=${adj}${animal}`;
-  
-  return { name: `${adj} ${animal}`, id, avatarUrl };
+  return { name, id, avatarUrl };
 }
 
 export function useLanDrop() {
@@ -22,6 +30,7 @@ export function useLanDrop() {
   const [transferProgress, setTransferProgress] = useState(null);
   const [incomingRequest, setIncomingRequest] = useState(null);
   const [incomingClipboard, setIncomingClipboard] = useState(null);
+  const [declinedTransfer, setDeclinedTransfer] = useState(null);
 
 	const ws = useRef(null);
 
@@ -217,8 +226,11 @@ export function useLanDrop() {
       } 
       else if (parsed.type === 'transfer:rejected') {
         console.log(`Transfer ${parsed.transferId} was declined.`);
-        alert("The receiver declined your file.");
-        pendingFileRef.current = null;
+        if (pendingFileRef.current) {
+          // Set the receiver's ID in state and auto-clear it after 4 seconds
+          setDeclinedTransfer(pendingFileRef.current.receiverId);
+          pendingFileRef.current = null;
+        }
       } // WebRTC Signaling Handlers
       else if (parsed.type === 'webrtc:offer') {
         await initWebRTC(parsed.senderId, false);
@@ -285,6 +297,8 @@ export function useLanDrop() {
     setTransferProgress,
     incomingClipboard,
     setIncomingClipboard,
-    sendClipboard
+    sendClipboard,
+    declinedTransfer,
+    setDeclinedTransfer
   };
 }
